@@ -191,14 +191,13 @@ proyecto_triage_6/
 
 ## Modelo de datos en Postgres
 
-Tabla principal **`Entrevista`** (sección 4.3 de guia.pdf, extendida con campos de guia2.pdf):
+Tabla principal **`Entrevista`** (sección 4.3 de guia.pdf, extendida con campos de guia2.pdf). `Grupo_Clinico` derivable desde `id_caso` (prefijo `RES`/`MSK`/`CAR`/`GAS`/`OTRO`) vía helper `grupo_from_id_caso()`:
 
 ```sql
 CREATE TABLE Entrevista (
     GUID_Entrevista VARCHAR(255) PRIMARY KEY,
     ID_CASO VARCHAR(50),
     Origen VARCHAR(20),
-    Grupo_Clinico VARCHAR(10),
     URL_Audio_Original VARCHAR(255),
     URL_Texto_Original VARCHAR(255),
     URL_Dataset_Generado VARCHAR(255),
@@ -264,6 +263,59 @@ CREATE TABLE Task_Log (
 
 ---
 
+## Datasets (formato de exportación)
+
+Definidos por `guia2.pdf`. El pipeline materializa dos datasets en parquet en `minio://datasets/`:
+
+### Dataset F1 — Integrado y normalizado (entrenamiento)
+
+Generado por `dataset-builder` a partir de `Entrevista ⋈ Texto_Procesado` con `triage_real IS NOT NULL`. **9 columnas** (8 del spec guia2 + `guid` para trazabilidad interna del pipeline ML).
+
+| Columna | Tipo | Fuente | Descripción |
+|---|---|---|---|
+| `guid` | str | `Entrevista.GUID_Entrevista` | Trazabilidad (no es feature ML, sklearn lo ignora) |
+| `id_caso` | str | `Entrevista.ID_CASO` | Identificador del caso (`RES0051`, `SIM_G1_01`...) — grupo clínico derivable del prefijo |
+| `origen` | str | `Entrevista.Origen` | `Dataset` / `Simulacion` / `MVP` |
+| `texto_original_en` | str / null | `Texto_Procesado.texto_original_en` | Transcripción inglesa (si aplica) |
+| `resumen_es` | str | `Texto_Procesado.resumen_es` | Resumen / transcripción en español |
+| `entidades_extraidas_es` | list[str] (JSONB) | `Texto_Procesado.entidades_extraidas_es` | Salida cruda LLM extraction |
+| `entidades_normalizadas_es` | list[str] (JSONB) | `Texto_Procesado.entidades_normalizadas_es` | Términos del diccionario cerrado Manchester |
+| `score_ansiedad` | float [0,1] | `Texto_Procesado.score_ansiedad` | Score emocional del paciente (para auditoría F2) |
+| `triage_real` | str (C1-C5) | `Texto_Procesado.triage_real` | Ground truth (etiqueta humana o LLM con revisión) |
+
+Ejemplo:
+
+| id_caso | origen | texto_original_en | resumen_es | entidades_extraidas_es | entidades_normalizadas_es | score_ansiedad | triage_real |
+|---|---|---|---|---|---|---|---|
+| `RES0051` | Dataset | "I have sharp chest pain..." | "Tengo un dolor torácico punzante..." | `["sharp pain","chest"]` | `["dolor_toracico","agudo"]` | 0.45 | C2 |
+| `SIM_G1_01` | Simulacion | — | "Me cuesta mucho respirar..." | `["cuesta respirar","cansado"]` | `["disnea","fatiga"]` | 0.98 | C2 |
+
+### Dataset F2 — Validación e inferencia
+
+Generado por `dataset-builder` (modo `f2`) a partir de `Entrevista ⋈ Texto_Procesado ⋈ Prediccion`. Hereda **todas las columnas de F1** + columnas de inferencia:
+
+| Columna | Tipo | Fuente | Descripción |
+|---|---|---|---|
+| *(F1 columns)* | — | — | Heredadas (ver tabla F1) |
+| `score_ansiedad_ia` | float [0,1] | `Prediccion.score_ansiedad_ia` | Score detectado por el modelo |
+| `prediccion_ia` | str (C1-C5) | `Prediccion.prediccion_ia` | Triage predicho por el modelo ML |
+| `ground_truth` | str (C1-C5) | alias de `triage_real` | Etiqueta real |
+| `validacion` | str | `Prediccion.validacion` | `Acierto` / `Under-triage` / `Over-triage` |
+| `motivo_fallo` | str / null | `Prediccion.motivo_fallo` | Diagnóstico de `audit-ethics` (sesgo emocional, etc.) |
+
+Ejemplo (vista resumida, columnas F1 ocultas):
+
+| id_caso | entidades_normalizadas_es | score_ansiedad_ia | prediccion_ia | ground_truth | validacion |
+|---|---|---|---|---|---|
+| `RES0051` | `["dolor_toracico","agudo"]` | 0.85 (Alta) | C2 | C2 | ✅ Acierto |
+| `SIM_G1_01` | `["disnea"]` | 0.98 (Extrema) | C3 | C2 | ❌ Under-triage |
+
+**Uso:**
+- F1 alimenta `ml-training` (entrenamiento del clasificador).
+- F2 alimenta `evaluation` + `audit-ethics` (medición de Recall por clase, detección de under-triage por sesgo emocional con `score_ansiedad_ia ≥ 0.8`).
+
+---
+
 ## Plan por iteraciones
 
 ### Iteración 0 — Esqueleto e infraestructura ✅
@@ -318,7 +370,7 @@ Cada servicio: FastAPI + `Dockerfile`, expone `POST /run` (JSON con `guid` + pay
 
 **Bloque C (datos y ML) ✅:**
 
-- [x] `dataset-builder` (`:9120`) — query `Texto_Procesado` con `triage_real`, exporta parquet con columnas guia2, sube a `minio://datasets/{batch_id}.parquet`, marca `Estado=DATASET_GENERADO` + `URL_Dataset_Generado` en `Entrevista`.
+- [x] `dataset-builder` (`:9120`) — query `Texto_Procesado` con `triage_real`, exporta parquet F1 (id_caso, origen, texto_original_en, resumen_es, entidades_extraidas_es, entidades_normalizadas_es, triage_real, **score_ansiedad**), sube a `minio://datasets/{batch_id}.parquet`, marca `Estado=DATASET_GENERADO` + `URL_Dataset_Generado` en `Entrevista`. **Pendiente Iter 5:** modo `f2` con join a `Prediccion` para exportar dataset de validación.
 - [x] `ml-training` (`:9121`) — TF-IDF n-gramas 1-2 + multi-hot entidades; comparativa LogReg/RandomForest/GradientBoosting con `class_weight='balanced'`; CV stratified (adaptativo según tamaño); selección por F1-macro; guarda `*.joblib` + `metrics.json` en `minio://modelos/`. Tests: 3 verdes.
 - [x] `ml-prediction` (`:9122`) — caché en memoria del último modelo, endpoint `/reload`, devuelve `prediccion_ia` + `probabilidades` (probas por clase). Persiste en `Prediccion` y avanza estado a `PREDICHO`.
 - [x] `evaluation` (`:9123`) — clasifica Acierto/Under-triage/Over-triage usando `under_triage`/`over_triage` helpers, escribe `Prediccion.validacion`, estado `EVALUADO`. Tests: 5 verdes.
@@ -356,11 +408,12 @@ Cada servicio: FastAPI + `Dockerfile`, expone `POST /run` (JSON con `guid` + pay
 - [ ] `scripts/download_fareez.py` (descarga desde Hugging Face).
 - [ ] `scripts/seed_postgres.py` (ingesta los 272 casos lanzando `dag_audio_ingestion`).
 - [ ] Ground truth: revisión humana del `triage_real` para 50 casos de control.
+- [ ] Ampliar `dataset-builder` con modo `f2` (incluye columnas de `Prediccion`).
 
-**Features:**
+**Features de entrenamiento (input F1):**
 - `resumen_es` → embeddings `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` o TF-IDF n-gramas 1-2.
 - `entidades_normalizadas_es` → multi-hot sobre los términos del diccionario.
-- `score_ansiedad` → no se usa como feature (sólo en `audit-ethics`).
+- `score_ansiedad` → no se usa como feature predictiva (evita sesgo emocional), sólo se persiste en F1 para alimentar después la auditoría ética en F2.
 
 **Algoritmo:**
 - Baseline `LogisticRegression(class_weight='balanced')`.

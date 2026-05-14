@@ -262,3 +262,17 @@ def under_triage(prediccion: TriageLevel, real: TriageLevel) -> bool:
 
 def over_triage(prediccion: TriageLevel, real: TriageLevel) -> bool:
     return prediccion.numeric < real.numeric
+
+
+_GRUPO_PREFIXES = {g.value for g in GrupoClinico}
+
+
+def grupo_from_id_caso(id_caso: Optional[str]) -> Optional[GrupoClinico]:
+    if not id_caso:
+        return None
+    upper = id_caso.upper()
+    for length in (4, 3):
+        prefix = upper[:length]
+        if prefix in _GRUPO_PREFIXES:
+            return GrupoClinico(prefix)
+    return None

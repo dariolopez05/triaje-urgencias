@@ -14,6 +14,7 @@ from triage_common.contracts import (
     ScoreResponse,
     TriageLevel,
     Validacion,
+    grupo_from_id_caso,
     over_triage,
     under_triage,
 )
@@ -115,3 +116,24 @@ class TestValidacion:
     def test_values(self):
         assert Validacion.UNDER_TRIAGE.value == "Under-triage"
         assert Validacion.ACIERTO.value == "Acierto"
+
+
+class TestGrupoFromIdCaso:
+    def test_extracts_res(self):
+        assert grupo_from_id_caso("RES0051") == GrupoClinico.RES
+
+    def test_extracts_car(self):
+        assert grupo_from_id_caso("CAR0001") == GrupoClinico.CAR
+
+    def test_extracts_otro(self):
+        assert grupo_from_id_caso("OTRO001") == GrupoClinico.OTRO
+
+    def test_lowercase(self):
+        assert grupo_from_id_caso("res0051") == GrupoClinico.RES
+
+    def test_unknown_prefix(self):
+        assert grupo_from_id_caso("SIM_G1_01") is None
+
+    def test_none(self):
+        assert grupo_from_id_caso(None) is None
+        assert grupo_from_id_caso("") is None

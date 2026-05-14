@@ -2,7 +2,6 @@ CREATE TABLE IF NOT EXISTS Entrevista (
     GUID_Entrevista              VARCHAR(255) PRIMARY KEY,
     ID_CASO                      VARCHAR(50),
     Origen                       VARCHAR(20)  CHECK (Origen IN ('Dataset','Simulacion','MVP')),
-    Grupo_Clinico                VARCHAR(10)  CHECK (Grupo_Clinico IN ('RES','MSK','CAR','GAS','OTRO')),
     URL_Audio_Original           VARCHAR(255),
     URL_Texto_Original           VARCHAR(255),
     URL_Dataset_Generado         VARCHAR(255),
@@ -29,7 +28,6 @@ CREATE TABLE IF NOT EXISTS Entrevista (
 );
 
 CREATE INDEX IF NOT EXISTS idx_entrevista_estado ON Entrevista (Estado);
-CREATE INDEX IF NOT EXISTS idx_entrevista_grupo  ON Entrevista (Grupo_Clinico);
 
 CREATE TABLE IF NOT EXISTS Texto_Procesado (
     guid                          VARCHAR(255) PRIMARY KEY
@@ -80,7 +78,6 @@ SELECT
     e.GUID_Entrevista,
     e.ID_CASO,
     e.Origen,
-    e.Grupo_Clinico,
     e.Estado,
     t.resumen_es,
     t.entidades_normalizadas_es,

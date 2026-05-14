@@ -63,7 +63,6 @@ def insert_entrevista(
     guid: str,
     id_caso: Optional[str] = None,
     origen: Optional[str] = None,
-    grupo_clinico: Optional[str] = None,
     url_audio_original: Optional[str] = None,
     url_texto_original: Optional[str] = None,
     motor_workflow: Optional[str] = None,
@@ -73,16 +72,15 @@ def insert_entrevista(
         cur.execute(
             """
             INSERT INTO Entrevista (
-                GUID_Entrevista, ID_CASO, Origen, Grupo_Clinico,
+                GUID_Entrevista, ID_CASO, Origen,
                 URL_Audio_Original, URL_Texto_Original,
                 Inicio_Solicitud, Motor_Workflow, Estado
-            ) VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, NOW(), %s, %s)
             """,
             (
                 guid,
                 id_caso,
                 origen,
-                grupo_clinico,
                 url_audio_original,
                 url_texto_original,
                 motor_workflow,

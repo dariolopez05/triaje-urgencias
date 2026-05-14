@@ -60,7 +60,7 @@ def test_ingesta_audio_ok(patched):
 
     response = client.post(
         "/ingesta",
-        data={"origen": "Dataset", "id_caso": "RES0051", "grupo_clinico": "RES"},
+        data={"origen": "Dataset", "id_caso": "RES0051"},
         files={"audio": ("clip.wav", b"FAKE_WAV_BYTES", "audio/wav")},
     )
 
@@ -70,7 +70,7 @@ def test_ingesta_audio_ok(patched):
     kwargs = db_mock.insert_entrevista.call_args.kwargs
     assert kwargs["id_caso"] == "RES0051"
     assert kwargs["origen"] == "Dataset"
-    assert kwargs["grupo_clinico"] == "RES"
+    assert "grupo_clinico" not in kwargs
     assert kwargs["url_audio_original"].startswith("s3://audio-original/")
     assert kwargs["url_texto_original"] is None
 
@@ -110,14 +110,6 @@ def test_ingesta_rejects_invalid_origen(patched):
     response = client.post("/ingesta", data={"texto": "x", "origen": "ZZZ"})
     assert response.status_code == 400
     assert "origen invalido" in response.json()["detail"]
-
-
-def test_ingesta_rejects_invalid_grupo(patched):
-    main, _, _ = patched
-    client = TestClient(main.app)
-
-    response = client.post("/ingesta", data={"texto": "x", "grupo_clinico": "XYZ"})
-    assert response.status_code == 400
 
 
 def test_trigger_dag_disabled_when_no_url(patched, monkeypatch):

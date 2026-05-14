@@ -46,14 +46,12 @@ def _fetch_dataset(only_origin: Optional[str]) -> list[dict]:
         SELECT e.GUID_Entrevista AS guid,
                e.ID_CASO AS id_caso,
                e.Origen AS origen,
-               e.Grupo_Clinico AS grupo_clinico,
                t.texto_original_en,
                t.resumen_es,
-               t.texto_preprocesado,
                t.entidades_extraidas_es,
                t.entidades_normalizadas_es,
-               t.triage_real,
-               t.score_ansiedad
+               t.score_ansiedad,
+               t.triage_real
         FROM Entrevista e
         JOIN Texto_Procesado t ON t.guid = e.GUID_Entrevista
         WHERE t.triage_real IS NOT NULL

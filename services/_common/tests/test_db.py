@@ -52,7 +52,6 @@ class TestInsertEntrevista:
             guid="g1",
             id_caso="RES0051",
             origen="Dataset",
-            grupo_clinico="RES",
             url_audio_original="s3://audio-original/g1.wav",
         )
         sql = _executed_sql(cursor)

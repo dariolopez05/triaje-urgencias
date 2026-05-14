@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from triage_common import db, storage
 from triage_common.contracts import (
     EntrevistaEstado,
-    GrupoClinico,
     IngestaResponse,
     Origen,
     TaskLogEntry,
@@ -52,15 +51,6 @@ def _parse_origen(raw: str) -> Origen:
         raise HTTPException(status_code=400, detail=f"origen invalido: {raw}") from exc
 
 
-def _parse_grupo(raw: Optional[str]) -> Optional[GrupoClinico]:
-    if raw is None or raw == "":
-        return None
-    try:
-        return GrupoClinico(raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"grupo_clinico invalido: {raw}") from exc
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -72,7 +62,6 @@ async def ingesta(
     audio: Annotated[Optional[UploadFile], File()] = None,
     id_caso: Annotated[Optional[str], Form()] = None,
     origen: Annotated[str, Form()] = Origen.MVP.value,
-    grupo_clinico: Annotated[Optional[str], Form()] = None,
 ) -> IngestaResponse:
     if (texto is None) == (audio is None):
         raise HTTPException(
@@ -81,7 +70,6 @@ async def ingesta(
         )
 
     origen_enum = _parse_origen(origen)
-    grupo_enum = _parse_grupo(grupo_clinico)
 
     guid = str(uuid.uuid4())
     started = datetime.utcnow()
@@ -116,7 +104,6 @@ async def ingesta(
         guid=guid,
         id_caso=id_caso,
         origen=origen_enum.value,
-        grupo_clinico=grupo_enum.value if grupo_enum else None,
         url_audio_original=url_audio,
         url_texto_original=url_texto,
         motor_workflow=motor,
