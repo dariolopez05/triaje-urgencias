@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "triage_common"
+version = "0.1.0"
+description = "Shared library for TriageIA microservices"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7,<3",
+    "psycopg2-binary>=2.9,<3",
+    "minio>=7.2,<8",
+    "httpx>=0.27,<1",
+    "Jinja2>=3.1,<4",
+    "tenacity>=9.0,<10",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3,<9",
+    "pytest-mock>=3.14,<4",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["triage_common*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"

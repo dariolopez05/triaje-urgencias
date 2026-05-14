@@ -1,0 +1,525 @@
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.3-python3.11
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow_pw}@postgres:5432/${AIRFLOW_DB_NAME:-airflow_db}
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+    _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    _PIP_ADDITIONAL_REQUIREMENTS: "apache-airflow-providers-http==4.13.1"
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./airflow/config:/opt/airflow/config
+  user: "${AIRFLOW_UID:-50000}:0"
+  networks: [triage_net]
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+
+  postgres:
+    image: postgres:15
+    container_name: triage_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:-airflow}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow_pw}
+      AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:-airflow_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-triage} -d ${POSTGRES_DB:-triage_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [triage_net]
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-13T22-19-12Z
+    container_name: triage_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_admin_pw}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [triage_net]
+
+  minio-bootstrap:
+    image: minio/mc:RELEASE.2024-11-21T17-21-54Z
+    container_name: triage_minio_bootstrap
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_admin_pw}
+      MINIO_BUCKETS: ${MINIO_BUCKETS:-audio-original,textos-originales,datasets,modelos}
+    entrypoint: ["/bin/sh", "/scripts/bootstrap-buckets.sh"]
+    volumes:
+      - ./infra/minio:/scripts:ro
+    networks: [triage_net]
+    restart: "no"
+
+  ollama:
+    image: ollama/ollama:0.4.7
+    container_name: triage_ollama
+    profiles: ["containerized-llm"]
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [triage_net]
+
+  ollama-init:
+    image: curlimages/curl:8.11.0
+    container_name: triage_ollama_init
+    profiles: ["containerized-llm"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-llama3,mistral}
+    entrypoint: ["/bin/sh", "/scripts/pull-models.sh"]
+    volumes:
+      - ./infra/ollama:/scripts:ro
+    networks: [triage_net]
+    restart: "no"
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: triage_airflow_init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate && \
+        airflow users create \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
+          --firstname Admin --lastname Admin \
+          --role Admin --email admin@triage.local || true
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: triage_airflow_web
+    command: webserver
+    restart: unless-stopped
+    ports:
+      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: triage_airflow_scheduler
+    command: scheduler
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}" || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  n8n:
+    image: n8nio/n8n:1.74.1
+    container_name: triage_n8n
+    restart: unless-stopped
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:-admin}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-cambia-esta-clave-de-32-caracteres}
+      GENERIC_TIMEZONE: Europe/Madrid
+      DB_TYPE: sqlite
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks: [triage_net]
+
+  transcripcion:
+    build:
+      context: .
+      dockerfile: services/transcripcion/Dockerfile
+    container_name: triage_transcripcion
+    restart: unless-stopped
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_admin_pw}
+      MINIO_SECURE: "false"
+    ports:
+      - "${TRANSCRIPCION_PORT:-9100}:9100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [triage_net]
+
+  streamlit-mvp:
+    build:
+      context: .
+      dockerfile: services/streamlit-mvp/Dockerfile
+    container_name: triage_streamlit
+    restart: unless-stopped
+    environment:
+      API_GATEWAY_INGESTA_URL: http://api-gateway-ingesta:8000
+      API_GATEWAY_CONSULTA_URL: http://api-gateway-consulta:8001
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    networks: [triage_net]
+
+  api-gateway-ingesta:
+    build:
+      context: .
+      dockerfile: services/api-gateway-ingesta/Dockerfile
+    container_name: triage_api_ingesta
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_admin_pw}
+      MINIO_SECURE: "false"
+      AIRFLOW_BASE_URL: ${AIRFLOW_BASE_URL:-}
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${API_GATEWAY_INGESTA_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [triage_net]
+
+  api-gateway-consulta:
+    build:
+      context: .
+      dockerfile: services/api-gateway-consulta/Dockerfile
+    container_name: triage_api_consulta
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+    ports:
+      - "${API_GATEWAY_CONSULTA_PORT:-8001}:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+  preprocessing:
+    build:
+      context: .
+      dockerfile: services/preprocessing/Dockerfile
+    container_name: triage_preprocessing
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+    ports:
+      - "${PREPROCESSING_PORT:-9101}:9101"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+  llm-extraction:
+    build:
+      context: .
+      dockerfile: services/llm-extraction/Dockerfile
+    container_name: triage_llm_extraction
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
+      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+    ports:
+      - "${LLM_EXTRACTION_PORT:-9110}:9110"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+  llm-normalization:
+    build:
+      context: .
+      dockerfile: services/llm-normalization/Dockerfile
+    container_name: triage_llm_normalization
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
+      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+    ports:
+      - "${LLM_NORMALIZATION_PORT:-9111}:9111"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+  llm-labeling:
+    build:
+      context: .
+      dockerfile: services/llm-labeling/Dockerfile
+    container_name: triage_llm_labeling
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
+      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+    ports:
+      - "${LLM_LABELING_PORT:-9112}:9112"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+  anxiety-score:
+    build:
+      context: .
+      dockerfile: services/anxiety-score/Dockerfile
+    container_name: triage_anxiety_score
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
+      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+    ports:
+      - "${ANXIETY_SCORE_PORT:-9113}:9113"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+  dataset-builder:
+    build:
+      context: .
+      dockerfile: services/dataset-builder/Dockerfile
+    container_name: triage_dataset_builder
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_admin_pw}
+      MINIO_SECURE: "false"
+    ports:
+      - "${DATASET_BUILDER_PORT:-9120}:9120"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [triage_net]
+
+  ml-training:
+    build:
+      context: .
+      dockerfile: services/ml-training/Dockerfile
+    container_name: triage_ml_training
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_admin_pw}
+      MINIO_SECURE: "false"
+    ports:
+      - "${ML_TRAINING_PORT:-9121}:9121"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [triage_net]
+
+  ml-prediction:
+    build:
+      context: .
+      dockerfile: services/ml-prediction/Dockerfile
+    container_name: triage_ml_prediction
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_admin_pw}
+      MINIO_SECURE: "false"
+    ports:
+      - "${ML_PREDICTION_PORT:-9122}:9122"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks: [triage_net]
+
+  evaluation:
+    build:
+      context: .
+      dockerfile: services/evaluation/Dockerfile
+    container_name: triage_evaluation
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+    ports:
+      - "${EVALUATION_PORT:-9123}:9123"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+  audit-ethics:
+    build:
+      context: .
+      dockerfile: services/audit-ethics/Dockerfile
+    container_name: triage_audit_ethics
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-triage}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-triage_db}
+    ports:
+      - "${AUDIT_ETHICS_PORT:-9124}:9124"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [triage_net]
+
+volumes:
+  postgres_data:
+  minio_data:
+  ollama_data:
+  n8n_data:
+
+networks:
+  triage_net:
+    driver: bridge

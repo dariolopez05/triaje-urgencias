@@ -1,0 +1,33 @@
+sintoma_coloquial,termino_clinico,prioridad_sugerida,grupo_clinico
+"me ahogo",disnea,C1,RES
+"no puedo respirar",disnea,C1,RES
+"falta de aire",disnea,C2,RES
+"me cuesta respirar",disnea,C2,RES
+"cuesta respirar",disnea,C2,RES
+"pitos",sibilancias,C2,RES
+"silbidos al inhalar",sibilancias,C2,RES
+"me silba el pecho",sibilancias,C3,RES
+"presion fuerte",dolor_toracico_opresivo,C2,CAR
+"como un elefante en el pecho",dolor_toracico_opresivo,C2,CAR
+"dolor opresivo",dolor_toracico_opresivo,C2,CAR
+"sharp chest pain",dolor_toracico_agudo,C2,CAR
+"dolor toracico punzante",dolor_toracico_agudo,C2,CAR
+"ardiendo",fiebre,C3,RES
+"tengo mucha calentura",fiebre,C3,RES
+"fiebre alta",fiebre,C3,RES
+"perdio el sentido",sincope,C1,CAR
+"se desplomo",sincope,C1,CAR
+"se desmayo",sincope,C1,CAR
+"hinchado",edema,C4,MSK
+"como un globo",edema,C4,MSK
+"inflamado",edema,C4,MSK
+"cansado",fatiga,C4,RES
+"agotado",fatiga,C4,RES
+"me duele el estomago",dolor_abdominal,C3,GAS
+"dolor en la barriga",dolor_abdominal,C3,GAS
+"vomitos",vomitos,C3,GAS
+"diarrea",diarrea,C4,GAS
+"me duele la espalda",lumbalgia,C4,MSK
+"lumbago",lumbalgia,C4,MSK
+"esguince",esguince,C4,MSK
+"torcedura",esguince,C4,MSK
