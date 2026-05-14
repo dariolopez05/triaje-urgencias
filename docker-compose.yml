@@ -83,39 +83,6 @@ services:
     networks: [triage_net]
     restart: "no"
 
-  ollama:
-    image: ollama/ollama:0.4.7
-    container_name: triage_ollama
-    profiles: ["containerized-llm"]
-    restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    networks: [triage_net]
-
-  ollama-init:
-    image: curlimages/curl:8.11.0
-    container_name: triage_ollama_init
-    profiles: ["containerized-llm"]
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODELS: ${OLLAMA_MODELS:-llama3,mistral}
-    entrypoint: ["/bin/sh", "/scripts/pull-models.sh"]
-    volumes:
-      - ./infra/ollama:/scripts:ro
-    networks: [triage_net]
-    restart: "no"
-
   airflow-init:
     <<: *airflow-common
     container_name: triage_airflow_init
@@ -313,14 +280,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-triage}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
       POSTGRES_DB: ${POSTGRES_DB:-triage_db}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
-      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
-      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-small-latest}
+      MISTRAL_BASE_URL: ${MISTRAL_BASE_URL:-https://api.mistral.ai}
+      MISTRAL_TIMEOUT: ${MISTRAL_TIMEOUT:-120}
+      MISTRAL_MAX_RETRIES: ${MISTRAL_MAX_RETRIES:-3}
     ports:
       - "${LLM_EXTRACTION_PORT:-9110}:9110"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -338,14 +304,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-triage}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
       POSTGRES_DB: ${POSTGRES_DB:-triage_db}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
-      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
-      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-small-latest}
+      MISTRAL_BASE_URL: ${MISTRAL_BASE_URL:-https://api.mistral.ai}
+      MISTRAL_TIMEOUT: ${MISTRAL_TIMEOUT:-120}
+      MISTRAL_MAX_RETRIES: ${MISTRAL_MAX_RETRIES:-3}
     ports:
       - "${LLM_NORMALIZATION_PORT:-9111}:9111"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -363,14 +328,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-triage}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
       POSTGRES_DB: ${POSTGRES_DB:-triage_db}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
-      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
-      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-small-latest}
+      MISTRAL_BASE_URL: ${MISTRAL_BASE_URL:-https://api.mistral.ai}
+      MISTRAL_TIMEOUT: ${MISTRAL_TIMEOUT:-120}
+      MISTRAL_MAX_RETRIES: ${MISTRAL_MAX_RETRIES:-3}
     ports:
       - "${LLM_LABELING_PORT:-9112}:9112"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -388,14 +352,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-triage}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage_pw}
       POSTGRES_DB: ${POSTGRES_DB:-triage_db}
-      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
-      OLLAMA_DEFAULT_MODEL: ${OLLAMA_DEFAULT_MODEL:-qwen3:4b}
-      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
-      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-3}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-small-latest}
+      MISTRAL_BASE_URL: ${MISTRAL_BASE_URL:-https://api.mistral.ai}
+      MISTRAL_TIMEOUT: ${MISTRAL_TIMEOUT:-120}
+      MISTRAL_MAX_RETRIES: ${MISTRAL_MAX_RETRIES:-3}
     ports:
       - "${ANXIETY_SCORE_PORT:-9113}:9113"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -517,7 +480,6 @@ services:
 volumes:
   postgres_data:
   minio_data:
-  ollama_data:
   n8n_data:
 
 networks:

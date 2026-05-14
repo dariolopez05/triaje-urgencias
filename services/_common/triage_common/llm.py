@@ -19,29 +19,34 @@ from tenacity import (
 DEFAULT_PROMPTS_DIR = Path(os.getenv("PROMPTS_DIR", "/app/data/prompts"))
 
 
-@dataclass(frozen=True)
-class LLMConfig:
-    base_url: str
-    default_model: str
-    timeout_seconds: float
-    max_retries: int
-
-    @classmethod
-    def from_env(cls) -> "LLMConfig":
-        return cls(
-            base_url=os.getenv("OLLAMA_HOST", "http://ollama:11434"),
-            default_model=os.getenv("OLLAMA_DEFAULT_MODEL", "llama3"),
-            timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT", "120")),
-            max_retries=int(os.getenv("OLLAMA_MAX_RETRIES", "3")),
-        )
-
-
 class LLMError(RuntimeError):
     pass
 
 
 class LLMInvalidJSON(LLMError):
     pass
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    base_url: str
+    default_model: str
+    api_key: str
+    timeout_seconds: float
+    max_retries: int
+
+    @classmethod
+    def from_env(cls) -> "LLMConfig":
+        api_key = os.getenv("MISTRAL_API_KEY", "").strip()
+        if not api_key:
+            raise LLMError("MISTRAL_API_KEY no esta configurada")
+        return cls(
+            base_url=os.getenv("MISTRAL_BASE_URL", "https://api.mistral.ai").rstrip("/"),
+            default_model=os.getenv("MISTRAL_MODEL", "mistral-small-latest"),
+            api_key=api_key,
+            timeout_seconds=float(os.getenv("MISTRAL_TIMEOUT", "120")),
+            max_retries=int(os.getenv("MISTRAL_MAX_RETRIES", "3")),
+        )
 
 
 class LLMClient:
@@ -70,28 +75,25 @@ class LLMClient:
         prompt: str,
         model: Optional[str] = None,
         json_mode: bool = False,
-        options: Optional[dict[str, Any]] = None,
-        think: bool = False,
+        temperature: float = 0.0,
     ) -> str:
         payload: dict[str, Any] = {
             "model": model or self._config.default_model,
-            "prompt": prompt,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
             "stream": False,
-            "think": think,
         }
         if json_mode:
-            payload["format"] = "json"
-        if options:
-            payload["options"] = options
-        return self._call_generate(payload)
+            payload["response_format"] = {"type": "json_object"}
+        return self._call_chat_completions(payload)
 
     def generate_json(
         self,
         prompt: str,
         model: Optional[str] = None,
-        options: Optional[dict[str, Any]] = None,
+        temperature: float = 0.0,
     ) -> dict[str, Any]:
-        raw = self.generate(prompt=prompt, model=model, json_mode=True, options=options)
+        raw = self.generate(prompt=prompt, model=model, json_mode=True, temperature=temperature)
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -103,32 +105,32 @@ class LLMClient:
         context: dict[str, Any],
         model: Optional[str] = None,
         json_mode: bool = False,
-        options: Optional[dict[str, Any]] = None,
+        temperature: float = 0.0,
     ) -> str:
         prompt = self.render(template_name, **context)
-        return self.generate(prompt=prompt, model=model, json_mode=json_mode, options=options)
+        return self.generate(prompt=prompt, model=model, json_mode=json_mode, temperature=temperature)
 
     def render_and_generate_json(
         self,
         template_name: str,
         context: dict[str, Any],
         model: Optional[str] = None,
-        options: Optional[dict[str, Any]] = None,
+        temperature: float = 0.0,
     ) -> dict[str, Any]:
         prompt = self.render(template_name, **context)
-        return self.generate_json(prompt=prompt, model=model, options=options)
-
-    def list_models(self) -> list[str]:
-        response = self._client.get(f"{self._config.base_url}/api/tags")
-        response.raise_for_status()
-        data = response.json()
-        return [model["name"] for model in data.get("models", [])]
+        return self.generate_json(prompt=prompt, model=model, temperature=temperature)
 
     def close(self) -> None:
         self._client.close()
 
-    def _call_generate(self, payload: dict[str, Any]) -> str:
+    def _call_chat_completions(self, payload: dict[str, Any]) -> str:
         attempts = max(1, self._config.max_retries)
+        headers = {
+            "Authorization": f"Bearer {self._config.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        url = f"{self._config.base_url}/v1/chat/completions"
 
         @retry(
             reraise=True,
@@ -137,14 +139,16 @@ class LLMClient:
             retry=retry_if_exception_type((httpx.HTTPError,)),
         )
         def _do_call() -> str:
-            response = self._client.post(
-                f"{self._config.base_url}/api/generate",
-                json=payload,
-            )
+            response = self._client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
-            if "response" not in data:
-                raise LLMError(f"Respuesta Ollama sin campo 'response': {data}")
-            return str(data["response"])
+            choices = data.get("choices") or []
+            if not choices:
+                raise LLMError(f"Respuesta Mistral sin 'choices': {data}")
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            if content is None:
+                raise LLMError(f"Respuesta Mistral sin 'content': {data}")
+            return str(content)
 
         return _do_call()

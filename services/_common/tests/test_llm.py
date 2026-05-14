@@ -12,8 +12,9 @@ from triage_common.llm import LLMClient, LLMConfig, LLMError, LLMInvalidJSON
 @pytest.fixture
 def config(tmp_path):
     return LLMConfig(
-        base_url="http://ollama:11434",
-        default_model="llama3",
+        base_url="https://api.mistral.ai",
+        default_model="mistral-small-latest",
+        api_key="test-key",
         timeout_seconds=10.0,
         max_retries=2,
     )
@@ -43,30 +44,43 @@ def _fake_response(json_payload, status_code=200):
     return response
 
 
+def _chat_payload(content: str) -> dict:
+    return {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+
 class TestGenerate:
-    def test_returns_response_field(self, llm, fake_client):
-        fake_client.post.return_value = _fake_response({"response": "hola"})
+    def test_returns_message_content(self, llm, fake_client):
+        fake_client.post.return_value = _fake_response(_chat_payload("hola"))
         out = llm.generate("test prompt")
         assert out == "hola"
-        kwargs = fake_client.post.call_args.kwargs
-        assert kwargs["json"]["model"] == "llama3"
-        assert kwargs["json"]["prompt"] == "test prompt"
-        assert kwargs["json"]["stream"] is False
-        assert "format" not in kwargs["json"]
+        call = fake_client.post.call_args
+        assert call.args[0] == "https://api.mistral.ai/v1/chat/completions"
+        body = call.kwargs["json"]
+        assert body["model"] == "mistral-small-latest"
+        assert body["messages"] == [{"role": "user", "content": "test prompt"}]
+        assert body["stream"] is False
+        assert "response_format" not in body
+        headers = call.kwargs["headers"]
+        assert headers["Authorization"] == "Bearer test-key"
 
-    def test_sets_json_format(self, llm, fake_client):
-        fake_client.post.return_value = _fake_response({"response": "{}"})
+    def test_sets_response_format_json(self, llm, fake_client):
+        fake_client.post.return_value = _fake_response(_chat_payload("{}"))
         llm.generate("p", json_mode=True)
-        kwargs = fake_client.post.call_args.kwargs
-        assert kwargs["json"]["format"] == "json"
+        body = fake_client.post.call_args.kwargs["json"]
+        assert body["response_format"] == {"type": "json_object"}
 
     def test_uses_override_model(self, llm, fake_client):
-        fake_client.post.return_value = _fake_response({"response": "ok"})
-        llm.generate("p", model="mistral")
-        assert fake_client.post.call_args.kwargs["json"]["model"] == "mistral"
+        fake_client.post.return_value = _fake_response(_chat_payload("ok"))
+        llm.generate("p", model="mistral-large-latest")
+        assert fake_client.post.call_args.kwargs["json"]["model"] == "mistral-large-latest"
 
-    def test_raises_on_missing_response_field(self, llm, fake_client):
-        fake_client.post.return_value = _fake_response({"unexpected": "x"})
+    def test_raises_on_empty_choices(self, llm, fake_client):
+        fake_client.post.return_value = _fake_response({"choices": []})
+        with pytest.raises(LLMError):
+            llm.generate("p")
+
+    def test_raises_on_missing_content(self, llm, fake_client):
+        fake_client.post.return_value = _fake_response({"choices": [{"message": {}}]})
         with pytest.raises(LLMError):
             llm.generate("p")
 
@@ -75,7 +89,7 @@ class TestRetries:
     def test_retries_on_http_error_then_succeeds(self, llm, fake_client):
         fake_client.post.side_effect = [
             httpx.ConnectError("temporarily unavailable"),
-            _fake_response({"response": "ok-after-retry"}),
+            _fake_response(_chat_payload("ok-after-retry")),
         ]
         out = llm.generate("p")
         assert out == "ok-after-retry"
@@ -91,13 +105,13 @@ class TestRetries:
 class TestGenerateJson:
     def test_parses_json_response(self, llm, fake_client):
         fake_client.post.return_value = _fake_response(
-            {"response": json.dumps({"entidades": ["disnea", "sincope"]})}
+            _chat_payload(json.dumps({"entidades": ["disnea", "sincope"]}))
         )
         data = llm.generate_json("p")
         assert data == {"entidades": ["disnea", "sincope"]}
 
     def test_raises_on_invalid_json(self, llm, fake_client):
-        fake_client.post.return_value = _fake_response({"response": "not json"})
+        fake_client.post.return_value = _fake_response(_chat_payload("not json"))
         with pytest.raises(LLMInvalidJSON):
             llm.generate_json("p")
 
@@ -137,19 +151,28 @@ class TestRender:
 class TestRenderAndGenerate:
     def test_combines_render_and_call(self, llm, fake_client):
         fake_client.post.return_value = _fake_response(
-            {"response": json.dumps({"entidades": ["disnea"]})}
+            _chat_payload(json.dumps({"entidades": ["disnea"]}))
         )
         result = llm.render_and_generate_json(
             "extract_entities.j2",
             context={"texto": "me ahogo"},
         )
         assert result == {"entidades": ["disnea"]}
-        assert "me ahogo" in fake_client.post.call_args.kwargs["json"]["prompt"]
+        body = fake_client.post.call_args.kwargs["json"]
+        assert "me ahogo" in body["messages"][0]["content"]
 
 
-class TestListModels:
-    def test_parses_tags_response(self, llm, fake_client):
-        fake_client.get.return_value = _fake_response(
-            {"models": [{"name": "llama3"}, {"name": "mistral"}]}
-        )
-        assert llm.list_models() == ["llama3", "mistral"]
+class TestFromEnv:
+    def test_requires_api_key(self, monkeypatch):
+        monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+        with pytest.raises(LLMError):
+            LLMConfig.from_env()
+
+    def test_reads_env(self, monkeypatch):
+        monkeypatch.setenv("MISTRAL_API_KEY", "abc")
+        monkeypatch.setenv("MISTRAL_MODEL", "mistral-large-latest")
+        monkeypatch.setenv("MISTRAL_BASE_URL", "https://custom.example/")
+        cfg = LLMConfig.from_env()
+        assert cfg.api_key == "abc"
+        assert cfg.default_model == "mistral-large-latest"
+        assert cfg.base_url == "https://custom.example"
