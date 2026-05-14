@@ -104,26 +104,26 @@ proyecto_triage_6/
 │   ├── minio/                  # bootstrap-buckets.sh
 │   └── ollama/                 # pull-models.sh
 ├── services/                   # microservicios FastAPI
-│   ├── transcripcion/          # Whisper (audio → texto) ✅ Iter 0
-│   ├── streamlit-mvp/          # dashboard sanitario ✅ Iter 0 (placeholder)
-│   ├── api-gateway-ingesta/    # ⏳ Iter 2
-│   ├── llm-extraction/         # ⏳ Iter 2
-│   ├── llm-normalization/      # ⏳ Iter 2
-│   ├── llm-labeling/           # ⏳ Iter 2
-│   ├── anxiety-score/          # ⏳ Iter 2
-│   ├── ml-training/            # ⏳ Iter 2
-│   ├── ml-prediction/          # ⏳ Iter 2
-│   ├── evaluation/             # ⏳ Iter 2
-│   ├── audit-ethics/           # ⏳ Iter 2 — under-triage detection
+│   ├── transcripcion/          # Whisper (audio → texto) - Iter 0
+│   ├── streamlit-mvp/          # dashboard sanitario - Iter 0 (placeholder)
+│   ├── api-gateway-ingesta/    # Iter 2
+│   ├── llm-extraction/         # Iter 2
+│   ├── llm-normalization/      # Iter 2
+│   ├── llm-labeling/           # Iter 2
+│   ├── anxiety-score/          # Iter 2
+│   ├── ml-training/            # Iter 2
+│   ├── ml-prediction/          # Iter 2
+│   ├── evaluation/             # Iter 2
+│   ├── audit-ethics/           # Iter 2 — under-triage detection
 │   └── _common/                # contratos Pydantic, clientes
 ├── airflow/dags/               # DAGs del pipeline ⏳ Iter 3
 ├── n8n/workflows/              # webhooks Fase 2 ⏳ Iter 4
 ├── data/
 │   ├── dictionaries/
-│   │   └── manchester_terms.csv  # diccionario clínico cerrado ✅
-│   ├── prompts/                # plantillas LLM ⏳ Iter 1
+│   │   └── manchester_terms.csv  # diccionario clínico cerrado
+│   ├── prompts/                # plantillas LLM - Iter 1
 │   ├── samples/                # audios y textos de prueba
-│   └── fareez_dataset/         # mirror del corpus ⏳ Iter 5
+│   └── fareez_dataset/         # mirror del corpus - Iter 5
 ├── scripts/                    # download_fareez.py, seed_postgres.py ⏳ Iter 5
 └── tests/{unit,integration,e2e}/
 ```
@@ -134,11 +134,11 @@ proyecto_triage_6/
 
 | Nivel | Color | Tiempo máx. | Descripción |
 |---|---|---|---|
-| C1 | 🔴 Rojo | 0 min | Emergencia |
-| C2 | 🟠 Naranja | 10 min | Muy urgente |
-| C3 | 🟡 Amarillo | 60 min | Urgente |
-| C4 | 🟢 Verde | 120 min | Menos urgente |
-| C5 | 🔵 Azul | 240 min | No urgente |
+| C1 | Rojo | 0 min | Emergencia |
+| C2 | Naranja | 10 min | Muy urgente |
+| C3 | Amarillo | 60 min | Urgente |
+| C4 | Verde | 120 min | Menos urgente |
+| C5 | Azul | 240 min | No urgente |
 
 **Objetivo cuantitativo:** `Recall(C1) ≥ 0.85` y `Recall(C2) ≥ 0.80` sobre el conjunto de prueba.
 
@@ -150,14 +150,14 @@ El plan completo (con estado actual de cada iteración) está en [`docs/plan.md`
 
 | Iter | Contenido | Estado |
 |---|---|---|
-| 0 | Esqueleto e infraestructura (este README) | ✅ |
-| 1 | Librería común, contratos Pydantic, diccionario, prompts LLM | ⏳ |
-| 2 | Microservicios FastAPI (10) + Streamlit | ⏳ |
-| 3 | DAGs Airflow (audio, texto, training, evaluación, auditoría) | ⏳ |
-| 4 | Flujos n8n (webhook Fase 2, notificaciones) | ⏳ |
-| 5 | Dataset Fareez et al. + entrenamiento modelo ML | ⏳ |
-| 6 | Tests de integración y E2E | ⏳ |
-| 7 | Documentación final + MVP Streamlit completo + presentación | ⏳ |
+| 0 | Esqueleto e infraestructura (este README) | completado |
+| 1 | Librería común, contratos Pydantic, diccionario, prompts LLM | pendiente |
+| 2 | Microservicios FastAPI (10) + Streamlit | pendiente |
+| 3 | DAGs Airflow (audio, texto, training, evaluación, auditoría) | pendiente |
+| 4 | Flujos n8n (webhook Fase 2, notificaciones) | pendiente |
+| 5 | Dataset Fareez et al. + entrenamiento modelo ML | pendiente |
+| 6 | Tests de integración y E2E | pendiente |
+| 7 | Documentación final + MVP Streamlit completo + presentación | pendiente |
 
 ---
 
@@ -165,5 +165,5 @@ El plan completo (con estado actual de cada iteración) está en [`docs/plan.md`
 
 ```bash
 docker compose down                  # para los servicios, conserva datos
-docker compose down -v               # ⚠️ borra también volúmenes (modelos, BD)
+docker compose down -v               # ATENCION: borra también volúmenes (modelos, BD)
 ```
